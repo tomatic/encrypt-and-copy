@@ -1,0 +1,106 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <title>Hybrid Decrypt</title>
+  <style>
+    body { font-family: sans-serif; padding: 2rem; max-width: 700px; }
+    textarea { width: 100%; height: 150px; }
+    button { margin: 1rem 0; padding: 0.5rem 1rem; }
+    pre { background: #f4f4f4; padding: 1rem; white-space: pre-wrap; word-wrap: break-word; }
+  </style>
+</head>
+<body>
+  <h1>Hybrid Decrypt</h1>
+
+  <p><strong>Step 1:</strong> Paste your <code>private key (PEM)</code></p>
+  <textarea id="privateKey" placeholder="-----BEGIN PRIVATE KEY----- ..."></textarea>
+
+  <p><strong>Step 2:</strong> Paste the <code>encrypted JSON</code> blob</p>
+  <textarea id="encryptedData" placeholder="{ &quot;iv&quot;: &quot;base64...&quot;, &quot;key&quot;: &quot;base64...&quot;, &quot;data&quot;: &quot;base64...&quot; }"></textarea>
+
+  <button id="decryptBtn">Decrypt</button>
+
+  <h2>Decrypted Output:</h2>
+  <pre id="output"></pre>
+
+  <script>
+    function base64ToArrayBuffer(base64) {
+      const binary = atob(base64);
+      const len = binary.length;
+      const bytes = new Uint8Array(len);
+      for (let i = 0; i < len; i++) {
+        bytes[i] = binary.charCodeAt(i);
+      }
+      return bytes.buffer;
+    }
+
+    async function importPrivateKey(pem) {
+      const pemBody = pem
+        .replace(/-----BEGIN PRIVATE KEY-----/, '')
+        .replace(/-----END PRIVATE KEY-----/, '')
+        .replace(/\s/g, '');
+      const binaryDer = atob(pemBody);
+      const binaryBuffer = new Uint8Array([...binaryDer].map(c => c.charCodeAt(0)));
+
+      return crypto.subtle.importKey(
+        "pkcs8",
+        binaryBuffer.buffer,
+        { name: "RSA-OAEP", hash: "SHA-256" },
+        false,
+        ["decrypt"]
+      );
+    }
+
+    async function hybridDecrypt(encrypted, privateKeyPem) {
+      const { iv, key, data } = encrypted;
+
+      const privKey = await importPrivateKey(privateKeyPem);
+      const decryptedAesKeyRaw = await crypto.subtle.decrypt(
+        { name: "RSA-OAEP" },
+        privKey,
+        base64ToArrayBuffer(key)
+      );
+
+      const aesKey = await crypto.subtle.importKey(
+        "raw",
+        decryptedAesKeyRaw,
+        { name: "AES-GCM" },
+        false,
+        ["decrypt"]
+      );
+
+      const decryptedBuffer = await crypto.subtle.decrypt(
+        {
+          name: "AES-GCM",
+          iv: base64ToArrayBuffer(iv)
+        },
+        aesKey,
+        base64ToArrayBuffer(data)
+      );
+
+      return new TextDecoder().decode(decryptedBuffer);
+    }
+
+    document.getElementById("decryptBtn").addEventListener("click", async () => {
+      const privateKeyPem = document.getElementById("privateKey").value.trim();
+      const encryptedText = document.getElementById("encryptedData").value.trim();
+      const output = document.getElementById("output");
+
+      try {
+        if (!privateKeyPem || !encryptedText) {
+          alert("Please provide both private key and encrypted data.");
+          return;
+        }
+
+        const encrypted = JSON.parse(encryptedText);
+        const plaintext = await hybridDecrypt(encrypted, privateKeyPem);
+        output.textContent = plaintext;
+      } catch (err) {
+        console.error("Decryption failed:", err);
+        output.textContent = "❌ Decryption failed. See console for details.";
+      }
+    });
+  </script>
+</body>
+</html>
