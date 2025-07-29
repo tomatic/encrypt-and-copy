@@ -1,0 +1,104 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <title>Hybrid Encrypt and Copy</title>
+  <style>
+    body { font-family: sans-serif; padding: 2rem; max-width: 600px; }
+    textarea { width: 100%; height: 150px; }
+    button { margin-top: 1rem; padding: 0.5rem 1rem; }
+    pre { background: #f0f0f0; padding: 1rem; overflow-x: auto; }
+  </style>
+</head>
+<body>
+  <h1>Encrypt Text and Copy</h1>
+  <textarea id="inputText" placeholder="Enter any text..."></textarea>
+  <button id="encryptBtn">Encrypt and Copy</button>
+
+  <script>
+    const publicKeyPem = `
+-----BEGIN PUBLIC KEY-----
+MIIBIjANBgkqhkiG9w0BAQEFAAOCAQ8AMIIBCgKCAQEAp8kF3mD7AdhJkA0Ay5sX
+K5t07VszhrZduYYZcGgwIt8W3MOpFl6AGDzj0Px2O58rVuC8v1R61y6/qLJBLNsZ
+A3rTPzSoUVpT6YguY4guPxvCdMEnOqLd34rgrL+pX2xY3K1Py8jQlK9whLExfdTD
+L+IxxJQ9Xk8ftcMeBlHdXdeHr9xgYFqQmyRgUETJvS1oXHmtQ5vhdAOfOMuNY5dC
+O1RIuQMP0JP+Fnh09+ChEVmMV0UOXaQ/O+td23s/PlV9E7oeQqvZLzTYE+XKvJsw
+SKXbZbwPCTqk/NlgjOmn9Plw1lK9zF9TXKkZQacls+LBKz2JGzDY8nkQnXGhNWHD
+twIDAQAB
+-----END PUBLIC KEY-----
+    `.trim();
+
+    async function importPublicKey(pem) {
+      const pemBody = pem
+        .replace(/-----BEGIN PUBLIC KEY-----/, '')
+        .replace(/-----END PUBLIC KEY-----/, '')
+        .replace(/\s/g, '');
+      const binaryDer = atob(pemBody);
+      const binaryBuffer = new Uint8Array([...binaryDer].map(c => c.charCodeAt(0)));
+      return crypto.subtle.importKey(
+        "spki",
+        binaryBuffer.buffer,
+        { name: "RSA-OAEP", hash: "SHA-256" },
+        false,
+        ["encrypt"]
+      );
+    }
+
+    async function hybridEncrypt(plaintext, publicKeyPem) {
+      // 1. Generate AES key
+      const aesKey = await crypto.subtle.generateKey(
+        { name: "AES-GCM", length: 256 },
+        true,
+        ["encrypt"]
+      );
+
+      // 2. Generate IV (initialization vector)
+      const iv = crypto.getRandomValues(new Uint8Array(12));
+
+      // 3. Encrypt the plaintext
+      const encodedText = new TextEncoder().encode(plaintext);
+      const ciphertext = await crypto.subtle.encrypt(
+        { name: "AES-GCM", iv },
+        aesKey,
+        encodedText
+      );
+
+      // 4. Export AES key and encrypt it with RSA
+      const rawAesKey = await crypto.subtle.exportKey("raw", aesKey);
+      const publicKey = await importPublicKey(publicKeyPem);
+      const encryptedAesKey = await crypto.subtle.encrypt(
+        { name: "RSA-OAEP" },
+        publicKey,
+        rawAesKey
+      );
+
+      // 5. Encode all to base64 for clipboard
+      const encodeB64 = (buf) => btoa(String.fromCharCode(...new Uint8Array(buf)));
+      return {
+        iv: encodeB64(iv),
+        key: encodeB64(encryptedAesKey),
+        data: encodeB64(ciphertext)
+      };
+    }
+
+    document.getElementById("encryptBtn").addEventListener("click", async () => {
+      const text = document.getElementById("inputText").value;
+      if (!text.trim()) {
+        alert("Please enter some text.");
+        return;
+      }
+
+      try {
+        const encryptedBlob = await hybridEncrypt(text, publicKeyPem);
+        const json = JSON.stringify(encryptedBlob, null, 2);
+        await navigator.clipboard.writeText(json);
+        alert("Encrypted data copied to clipboard!");
+        console.log("Encrypted blob:", encryptedBlob);
+      } catch (err) {
+        console.error("Encryption failed:", err);
+        alert("Encryption failed. See console for details.");
+      }
+    });
+  </script>
+</body>
+</html>
